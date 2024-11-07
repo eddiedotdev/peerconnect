@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { PeerSync } from '../core/PeerSync';
-import type { PeerConnectionManager } from '../core/PeerConnectionManager';
+import { PeerSync } from '../core/peer-connect';
+import type { PeerConnectionManager } from '../core/connection-manager';
 import type { PeerMessage } from '../core/types';
 
 describe('PeerSync', () => {
@@ -108,6 +108,7 @@ describe('PeerSync', () => {
       ['peer1', {}],
       ['peer2', {}],
     ]);
+    // @ts-expect-error
     mockManager.connections = mockConnections;
 
     expect(peerSync.roomId).toBe(roomId);

@@ -1,12 +1,12 @@
 import { EventEmitter } from 'events';
-import { PeerConnectionManager } from './PeerConnectionManager';
-import type { PeerMessage, PeerSyncOptions } from './types';
+import { PeerConnectionManager } from './connection-manager';
+import type { PeerMessage, PeerConnectOptions } from './types';
 
 export class PeerSync extends EventEmitter {
   private manager: PeerConnectionManager;
   public readonly roomId: string;
 
-  constructor(options: PeerSyncOptions) {
+  constructor(options: PeerConnectOptions) {
     super();
     this.roomId = options.roomId;
 

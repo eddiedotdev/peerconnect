@@ -1,6 +1,6 @@
-import { PeerConnectionManager } from "./PeerConnectionManager";
+import { PeerConnectionManager } from './connection-manager';
 
-export interface PeerSyncOptions {
+export interface PeerConnectOptions {
   roomId: string;
   manager?: PeerConnectionManager;
   iceServers?: RTCIceServer[];
@@ -17,4 +17,4 @@ export interface PeerConnection {
   dataChannel?: RTCDataChannel;
   state: 'connecting' | 'connected' | 'disconnected' | 'error';
   iceConnectionState: RTCIceConnectionState;
-} 
+}

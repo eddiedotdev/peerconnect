@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { PeerConnectionManager } from '../core/PeerConnectionManager';
-import type { PeerMessage } from '../core/types';
+import { PeerConnectionManager } from '@/core/connection-manager';
+import type { PeerMessage } from '@/core/types';
 
 describe('PeerConnectionManager', () => {
   let manager: PeerConnectionManager;
