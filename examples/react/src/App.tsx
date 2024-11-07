@@ -116,10 +116,15 @@ function Room({
             className="flex-1 px-2 py-1 border rounded"
           />
           <button
-            onClick={() => {
+            onClick={async () => {
               if (messageText.trim()) {
-                actions.sendMessage(messageText);
-                setMessageText('');
+                try {
+                  await actions.sendMessage(messageText);
+                  setMessageText('');
+                } catch (error) {
+                  console.error('Failed to send message:', error);
+                  // Optionally add user feedback here
+                }
               }
             }}
             className="px-4 py-2 bg-green-500 text-white rounded"
