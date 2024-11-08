@@ -6,7 +6,10 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [
-    dts(),
+    dts({
+      include: ['src/'],
+      exclude: ['src/**/__tests__/**'],
+    }),
     nodePolyfills({
       include: ['events'],
     }),
@@ -20,9 +23,12 @@ export default defineConfig({
   },
   build: {
     lib: {
-      entry: resolve(__dirname, 'src/index.ts'),
+      entry: {
+        index: resolve(__dirname, 'src/core/index.ts'),
+        react: resolve(__dirname, 'src/react/index.ts'),
+      },
       formats: ['es'],
-      fileName: 'index',
+      fileName: (entryName) => `${entryName}.js`,
     },
     rollupOptions: {
       external: ['react', '@tanstack/react-query'],
