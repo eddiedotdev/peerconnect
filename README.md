@@ -32,7 +32,7 @@ npm install peerconnect
 ### React
 
 ```bash
-npm install peerconnect react @tanstack/react-query
+npm install peerconnect
 ```
 
 ## Usage
