@@ -91,7 +91,6 @@ function App() {
   );
 }
 
-// Use the hooks in your components
 function ChatRoom({ roomId, setRoomId }) {
   const [messageText, setMessageText] = useState('');
   const [state, actions] = useRoom(roomId, setRoomId);
