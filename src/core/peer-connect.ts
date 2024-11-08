@@ -10,7 +10,6 @@ export class PeerSync extends EventEmitter {
     super();
     this.roomId = options.roomId;
 
-    // Create manager options by excluding the manager property
     const { manager, ...managerOptions } = options;
     this.manager = manager || new PeerConnectionManager(managerOptions);
 
