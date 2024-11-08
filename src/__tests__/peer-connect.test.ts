@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { PeerSync } from '../core/peer-connect';
+import { PeerConnect } from '../core/peer-connect';
 import type { PeerConnectionManager } from '../core/connection-manager';
 import type { PeerMessage } from '../core/types';
 
 describe('PeerSync', () => {
   let mockManager: PeerConnectionManager;
-  let peerSync: PeerSync;
+  let peerSync: PeerConnect;
   const roomId = 'test-room';
 
   beforeEach(() => {
@@ -23,7 +23,7 @@ describe('PeerSync', () => {
       connections: new Map(),
     } as unknown as PeerConnectionManager;
 
-    peerSync = new PeerSync({
+    peerSync = new PeerConnect({
       roomId,
       manager: mockManager,
     });
