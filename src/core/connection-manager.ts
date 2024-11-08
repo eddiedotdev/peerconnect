@@ -1,16 +1,52 @@
 import { EventEmitter } from 'events';
 import { PeerConnectOptions, PeerConnection, PeerMessage } from './types';
 
+const isTest = process.env.NODE_ENV === 'test';
+
+class Logger {
+  static log(...args: any[]) {
+    if (!isTest) {
+      console.log(...args);
+    }
+  }
+
+  static warn(...args: any[]) {
+    if (!isTest) {
+      console.warn(...args);
+    }
+  }
+
+  static error(...args: any[]) {
+    if (!isTest) {
+      console.error(...args);
+    }
+  }
+}
+
+/**
+ * Event handlers interface for peer connection events.
+ * @interface PeerEvents
+ */
 interface PeerEvents {
+  /** Fired when a message is received from a peer */
   message: (message: PeerMessage, peerId: string) => void;
+  /** Fired when a new peer joins the room */
   peerJoin: (peerId: string) => void;
+  /** Fired when a peer leaves the room */
   peerLeave: (peerId: string) => void;
+  /** Fired when successfully joined a room */
   roomJoined: (roomId: string) => void;
+  /** Fired when leaving a room */
   roomLeft: (roomId: string) => void;
+  /** Fired when disconnecting from all peers */
   disconnect: () => void;
+  /** Fired when an error occurs */
   error: (error: Error) => void;
+  /** Fired when a new ICE candidate is generated */
   iceCandidate: (candidate: RTCIceCandidate, peerId: string) => void;
+  /** Fired when connection info (offer/answer) is available */
   connectionInfo: (info: RTCSessionDescriptionInit) => void;
+  /** Fired when connection state changes */
   connectionStateChange: (change: {
     peerId: string;
     state: string;
@@ -19,26 +55,116 @@ interface PeerEvents {
   }) => void;
 }
 
+/**
+ * Core interface for managing WebRTC peer connections.
+ * @interface IPeerConnectionManager
+ * @extends {EventEmitter}
+ */
 interface IPeerConnectionManager {
-  on<K extends keyof PeerEvents>(event: K, listener: PeerEvents[K]): this;
-  emit<K extends keyof PeerEvents>(
-    event: K,
-    ...args: Parameters<PeerEvents[K]>
-  ): boolean;
+  /**
+   * Creates a new room with the specified ID and initializes as host.
+   * @async
+   * @param {string} roomId - Unique identifier for the room
+   * @throws {Error} If room creation fails or already in a room
+   */
+  createRoom(roomId: string): Promise<void>;
+
+  /**
+   * Joins an existing room with the specified ID.
+   * @async
+   * @param {string} roomId - ID of the room to join
+   * @throws {Error} If room joining fails or already in a room
+   */
   joinRoom(roomId: string): Promise<void>;
-  leaveRoom(): void;
-  createPeerConnection(peerId: string): Promise<void>;
+
+  /**
+   * Retrieves the connection information needed for peers to join.
+   * @async
+   * @returns {Promise<string>} Base64 encoded connection string containing room details
+   * @throws {Error} If no active room or connection info unavailable
+   */
+  getConnectionInfo(): Promise<string>;
+
+  /**
+   * Establishes connection using provided connection information.
+   * @async
+   * @param {string} encodedInfo - Base64 encoded connection string from host
+   * @throws {Error} If connection fails or info is invalid
+   */
+  connectWithInfo(encodedInfo: string): Promise<void>;
+
+  /**
+   * Sends a message to one or all peers in the room.
+   * @async
+   * @param {PeerMessage} message - Message to send
+   * @param {string} [targetPeerId] - Specific peer to send to, or all if omitted
+   * @throws {Error} If not connected or sending fails
+   */
   sendMessage(message: PeerMessage, targetPeerId?: string): Promise<void>;
-  disconnect(): void;
-  getPeerIds(): string[];
+
+  /**
+   * Leaves the current room and disconnects from all peers.
+   */
+  leaveRoom(): void;
+
+  /**
+   * Gets the current room ID if connected to a room.
+   * @returns {string | null} Current room ID or null if not in a room
+   */
   getCurrentRoom(): string | null;
+
+  /**
+   * Creates a new peer connection with the specified peer.
+   * @async
+   * @param {string} peerId - ID of the peer to connect to
+   * @throws {Error} If not in a room or connection fails
+   */
+  createPeerConnection(peerId: string): Promise<void>;
+
+  /**
+   * Handles incoming ICE candidate from a peer.
+   * @async
+   * @param {RTCIceCandidate} candidate - ICE candidate information
+   * @param {string} peerId - ID of the peer the candidate is from
+   */
   handleIceCandidate(candidate: RTCIceCandidate, peerId: string): Promise<void>;
+
+  /**
+   * Handles incoming connection info (offer/answer) from a peer.
+   * @async
+   * @param {RTCSessionDescriptionInit} info - Session description for the connection
+   * @param {string} peerId - ID of the peer the info is from
+   */
   handleConnectionInfo(
     info: RTCSessionDescriptionInit,
     peerId: string
   ): Promise<void>;
+
+  /**
+   * Disconnects from all peers and cleans up connections.
+   */
+  disconnect(): void;
+
+  /**
+   * Gets array of currently connected peer IDs.
+   * @returns {string[]} Array of peer IDs
+   */
+  getPeerIds(): string[];
+
+  /**
+   * Checks if connected to a specific peer or host.
+   * @param {string} [peerId='host'] - ID of peer to check
+   * @returns {boolean} True if connected to the specified peer
+   */
+  isConnected(peerId?: string): boolean;
 }
 
+/**
+ * Main class for managing WebRTC peer connections and room coordination.
+ * @class PeerConnectionManager
+ * @extends {EventEmitter}
+ * @implements {IPeerConnectionManager}
+ */
 export class PeerConnectionManager
   extends EventEmitter
   implements IPeerConnectionManager
@@ -59,87 +185,89 @@ export class PeerConnectionManager
   }
 
   public async createRoom(roomId: string): Promise<void> {
-    try {
-      console.log('Creating room:', roomId);
+    return this.retryConnection(async () => {
+      try {
+        Logger.log('Creating room:', roomId);
 
-      if (this.currentRoomId) {
-        this.leaveRoom();
+        if (this.currentRoomId) {
+          this.leaveRoom();
+        }
+
+        this.currentRoomId = roomId;
+        this.isHost = true;
+
+        const connection = new RTCPeerConnection({
+          iceServers: this.iceServers,
+        });
+
+        // Create data channel
+        const dataChannel = connection.createDataChannel('messageChannel', {
+          ordered: true,
+        });
+
+        // Monitor connection states
+        connection.onconnectionstatechange = () => {
+          Logger.log('Connection state changed:', connection.connectionState);
+          this.emit('connectionStateChange', {
+            peerId: 'host',
+            state: connection.connectionState,
+            connectionState: connection.connectionState,
+            dataChannelState: dataChannel.readyState,
+          });
+        };
+
+        dataChannel.onopen = () => {
+          Logger.log('Data channel opened');
+          this.emit('connectionStateChange', {
+            peerId: 'host',
+            state: 'connected',
+            connectionState: connection.connectionState,
+            dataChannelState: 'open',
+          });
+        };
+
+        // Store connection info
+        this.connections.set('host', {
+          connection,
+          dataChannel,
+          state: 'connecting',
+          iceConnectionState: connection.iceConnectionState,
+        });
+
+        // Create offer
+        const offer = await connection.createOffer();
+        await connection.setLocalDescription(offer);
+
+        // Handle ICE candidates
+        connection.onicecandidate = (event) => {
+          if (event.candidate) {
+            Logger.log('New ICE candidate:', event.candidate);
+            const candidates = this.iceCandidates.get('host') || [];
+            candidates.push(event.candidate);
+            this.iceCandidates.set('host', candidates);
+            this.emit('iceCandidate', event.candidate, 'host');
+          }
+        };
+
+        // Wait for ICE gathering
+        await new Promise<void>((resolve) => {
+          if (connection.iceGatheringState === 'complete') {
+            resolve();
+          } else {
+            connection.onicegatheringstatechange = () => {
+              if (connection.iceGatheringState === 'complete') {
+                resolve();
+              }
+            };
+          }
+        });
+
+        this.emit('roomJoined', roomId);
+      } catch (error) {
+        Logger.error('Error in createRoom:', error);
+        throw error;
       }
-
-      this.currentRoomId = roomId;
-      this.isHost = true;
-
-      const connection = new RTCPeerConnection({
-        iceServers: this.iceServers,
-      });
-
-      // Create data channel
-      const dataChannel = connection.createDataChannel('messageChannel', {
-        ordered: true,
-      });
-
-      // Monitor connection states
-      connection.onconnectionstatechange = () => {
-        console.log('Connection state changed:', connection.connectionState);
-        this.emit('connectionStateChange', {
-          peerId: 'host',
-          state: connection.connectionState,
-          connectionState: connection.connectionState,
-          dataChannelState: dataChannel.readyState,
-        });
-      };
-
-      dataChannel.onopen = () => {
-        console.log('Data channel opened');
-        this.emit('connectionStateChange', {
-          peerId: 'host',
-          state: 'connected',
-          connectionState: connection.connectionState,
-          dataChannelState: 'open',
-        });
-      };
-
-      // Store connection info
-      this.connections.set('host', {
-        connection,
-        dataChannel,
-        state: 'connecting',
-        iceConnectionState: connection.iceConnectionState,
-      });
-
-      // Create offer
-      const offer = await connection.createOffer();
-      await connection.setLocalDescription(offer);
-
-      // Handle ICE candidates
-      connection.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('New ICE candidate:', event.candidate);
-          const candidates = this.iceCandidates.get('host') || [];
-          candidates.push(event.candidate);
-          this.iceCandidates.set('host', candidates);
-          this.emit('iceCandidate', event.candidate, 'host');
-        }
-      };
-
-      // Wait for ICE gathering
-      await new Promise<void>((resolve) => {
-        if (connection.iceGatheringState === 'complete') {
-          resolve();
-        } else {
-          connection.onicegatheringstatechange = () => {
-            if (connection.iceGatheringState === 'complete') {
-              resolve();
-            }
-          };
-        }
-      });
-
-      this.emit('roomJoined', roomId);
-    } catch (error) {
-      console.error('Error in createRoom:', error);
-      throw error;
-    }
+    });
   }
 
   public async joinRoom(roomId: string): Promise<void> {
@@ -147,10 +275,11 @@ export class PeerConnectionManager
       this.leaveRoom();
     }
 
+    // Just set initial state. The actual WebRTC connection
+    // will be created when connectWithInfo() is called with
+    // the host's connection details
     this.currentRoomId = roomId;
     this.isHost = false;
-
-    // Don't create a new connection here as we'll be using the one from connectWithInfo
     this.emit('roomJoined', roomId);
   }
 
@@ -176,84 +305,89 @@ export class PeerConnectionManager
   }
 
   public async connectWithInfo(encodedInfo: string): Promise<void> {
-    try {
-      const info = JSON.parse(atob(encodedInfo));
-      console.log('Connecting with info:', info);
+    return this.retryConnection(async () => {
+      try {
+        const info = JSON.parse(atob(encodedInfo));
+        Logger.log('Connecting with info:', info);
 
-      if (!info.sdp || !info.type || !info.roomId) {
-        throw new Error('Invalid connection info');
-      }
+        if (!info.sdp || !info.type || !info.roomId) {
+          throw new Error('Invalid connection info');
+        }
 
-      this.currentRoomId = info.roomId;
-      this.isHost = false;
+        this.currentRoomId = info.roomId;
+        this.isHost = false;
 
-      // Create new peer connection for joining
-      this.localConnection = new RTCPeerConnection({
-        iceServers: this.iceServers,
-      });
+        // Create new peer connection for joining
+        this.localConnection = new RTCPeerConnection({
+          iceServers: this.iceServers,
+        });
 
-      // Set up ICE candidate handling
-      this.localConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('Generated answer ICE candidate:', event.candidate);
-          // Store and emit the candidate
-          if (!this.iceCandidates.has('peer')) {
-            this.iceCandidates.set('peer', []);
+        // Set up ICE candidate handling
+        this.localConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            Logger.log('Generated answer ICE candidate:', event.candidate);
+            // Store and emit the candidate
+            if (!this.iceCandidates.has('peer')) {
+              this.iceCandidates.set('peer', []);
+            }
+            this.iceCandidates.get('peer')!.push(event.candidate);
+            this.emit('iceCandidate', event.candidate, 'peer');
           }
-          this.iceCandidates.get('peer')!.push(event.candidate);
-          this.emit('iceCandidate', event.candidate, 'peer');
-        }
-      };
+        };
 
-      // Add connection state logging
-      this.localConnection.oniceconnectionstatechange = () => {
-        console.log(
-          'ICE Connection state:',
-          this.localConnection?.iceConnectionState
-        );
-      };
-
-      this.localConnection.onconnectionstatechange = () => {
-        console.log('Connection state:', this.localConnection?.connectionState);
-      };
-
-      // Set remote description (the offer)
-      await this.localConnection.setRemoteDescription(
-        new RTCSessionDescription({
-          type: info.type,
-          sdp: info.sdp,
-        })
-      );
-
-      // Create and set local description (answer)
-      const answer = await this.localConnection.createAnswer();
-      await this.localConnection.setLocalDescription(answer);
-
-      // Emit the answer to be sent back to the host
-      this.emit('connectionInfo', {
-        type: 'answer',
-        sdp: answer.sdp,
-        candidates: this.iceCandidates.get('peer'),
-      });
-
-      // Add the received ICE candidates
-      if (info.candidates) {
-        for (const candidate of info.candidates) {
-          await this.localConnection?.addIceCandidate(
-            new RTCIceCandidate(candidate)
+        // Add connection state logging
+        this.localConnection.oniceconnectionstatechange = () => {
+          Logger.log(
+            'ICE Connection state:',
+            this.localConnection?.iceConnectionState
           );
+        };
+
+        this.localConnection.onconnectionstatechange = () => {
+          Logger.log(
+            'Connection state:',
+            this.localConnection?.connectionState
+          );
+        };
+
+        // Set remote description (the offer)
+        await this.localConnection.setRemoteDescription(
+          new RTCSessionDescription({
+            type: info.type,
+            sdp: info.sdp,
+          })
+        );
+
+        // Create and set local description (answer)
+        const answer = await this.localConnection.createAnswer();
+        await this.localConnection.setLocalDescription(answer);
+
+        // Emit the answer to be sent back to the host
+        this.emit('connectionInfo', {
+          type: 'answer',
+          sdp: answer.sdp,
+          candidates: this.iceCandidates.get('peer'),
+        });
+
+        // Add the received ICE candidates
+        if (info.candidates) {
+          for (const candidate of info.candidates) {
+            await this.localConnection?.addIceCandidate(
+              new RTCIceCandidate(candidate)
+            );
+          }
         }
+
+        // Emit the answer
+        this.emit('connectionInfo', this.localConnection.localDescription);
+        this.emit('roomJoined', info.roomId);
+
+        Logger.log('Successfully joined room:', info.roomId);
+      } catch (error) {
+        Logger.error('Failed to connect with info:', error);
+        throw error;
       }
-
-      // Emit the answer
-      this.emit('connectionInfo', this.localConnection.localDescription);
-      this.emit('roomJoined', info.roomId);
-
-      console.log('Successfully joined room:', info.roomId);
-    } catch (error) {
-      console.error('Failed to connect with info:', error);
-      throw error;
-    }
+    });
   }
 
   public async handleConnectionInfo(
@@ -341,58 +475,48 @@ export class PeerConnectionManager
   }
 
   private setupDataChannel(channel: RTCDataChannel, peerId: string) {
-    console.log(
-      `Setting up data channel for peer: ${peerId}, current state:`,
-      channel.readyState
-    );
-
-    channel.onopen = () => {
-      console.log(`Data channel opened for peer: ${peerId}`);
-      const peerConn = this.connections.get(peerId);
-      if (peerConn) {
-        peerConn.state = 'connected';
-        this.emit('connectionStateChange', {
-          peerId,
-          state: 'connected',
-          dataChannelState: channel.readyState,
-        });
-        // Also emit peerJoin when data channel opens
-        this.emit('peerJoin', peerId);
-      }
+    const handlers = {
+      onopen: () => {
+        Logger.log(`Data channel opened for peer: ${peerId}`);
+        const peerConn = this.connections.get(peerId);
+        if (peerConn) {
+          peerConn.state = 'connected';
+          this.emit('connectionStateChange', {
+            peerId,
+            state: 'connected',
+            dataChannelState: channel.readyState,
+          });
+          // Also emit peerJoin when data channel opens
+          this.emit('peerJoin', peerId);
+        }
+      },
+      onclose: () => {
+        Logger.log(`Data channel closed for peer: ${peerId}`);
+        const peerConn = this.connections.get(peerId);
+        if (peerConn) {
+          peerConn.state = 'disconnected';
+          this.emit('connectionStateChange', {
+            peerId,
+            state: 'disconnected',
+            dataChannelState: 'closed',
+          });
+        }
+      },
+      onerror: (error: Event) => {
+        Logger.error(`Data channel error for peer: ${peerId}:`, error);
+        this.emit('error', new Error(`Data channel error: ${error}`));
+      },
     };
 
-    channel.onclose = () => {
-      console.log(`Data channel closed for peer: ${peerId}`);
-      const peerConn = this.connections.get(peerId);
-      if (peerConn) {
-        peerConn.state = 'disconnected';
-        this.emit('connectionStateChange', {
-          peerId,
-          state: 'disconnected',
-          dataChannelState: 'closed',
-        });
-      }
-    };
+    channel.onopen = handlers.onopen;
+    channel.onclose = handlers.onclose;
+    channel.onerror = handlers.onerror;
 
-    channel.onerror = (error) => {
-      console.error(`Data channel error for peer: ${peerId}:`, error);
-      this.emit('error', new Error(`Data channel error: ${error}`));
+    return () => {
+      channel.onopen = null;
+      channel.onclose = null;
+      channel.onerror = null;
     };
-
-    // If channel is already open, emit the events immediately
-    if (channel.readyState === 'open') {
-      const connection = this.connections.get(peerId);
-      if (connection) {
-        connection.state = 'connected';
-        connection.dataChannel = channel;
-        this.emit('peerJoin', peerId);
-        this.emit('connectionStateChange', {
-          peerId,
-          state: 'connected',
-          dataChannelState: 'open',
-        });
-      }
-    }
   }
 
   private setupPeerConnectionListeners(
@@ -402,7 +526,7 @@ export class PeerConnectionManager
     // ICE Candidate Generation
     connection.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log(`ICE candidate generated for ${peerId}:`, event.candidate);
+        Logger.log(`ICE candidate generated for ${peerId}:`, event.candidate);
         const candidates = this.iceCandidates.get(peerId) || [];
         candidates.push(event.candidate);
         this.iceCandidates.set(peerId, candidates);
@@ -412,7 +536,7 @@ export class PeerConnectionManager
 
     // ICE Connection State
     connection.oniceconnectionstatechange = () => {
-      console.log(
+      Logger.log(
         `ICE Connection state for ${peerId}:`,
         connection.iceConnectionState
       );
@@ -438,10 +562,7 @@ export class PeerConnectionManager
 
     // Connection State
     connection.onconnectionstatechange = () => {
-      console.log(
-        `Connection state for ${peerId}:`,
-        connection.connectionState
-      );
+      Logger.log(`Connection state for ${peerId}:`, connection.connectionState);
       const peerConn = this.connections.get(peerId);
       if (peerConn) {
         if (connection.connectionState === 'connected') {
@@ -458,12 +579,12 @@ export class PeerConnectionManager
 
     // Signaling State
     connection.onsignalingstatechange = () => {
-      console.log(`Signaling state for ${peerId}:`, connection.signalingState);
+      Logger.log(`Signaling state for ${peerId}:`, connection.signalingState);
     };
 
     // Negotiation Needed
     connection.onnegotiationneeded = () => {
-      console.log(`Negotiation needed for ${peerId}`);
+      Logger.log(`Negotiation needed for ${peerId}`);
     };
 
     // Data Channel Events
@@ -472,7 +593,7 @@ export class PeerConnectionManager
       const dataChannel = peerConnection.dataChannel;
 
       dataChannel.onopen = () => {
-        console.log(`Data channel opened for ${peerId}`);
+        Logger.log(`Data channel opened for ${peerId}`);
         if (peerConnection.state !== 'connected') {
           peerConnection.state = 'connected';
           this.emit('connectionStateChange', {
@@ -485,7 +606,7 @@ export class PeerConnectionManager
       };
 
       dataChannel.onclose = () => {
-        console.log(`Data channel closed for ${peerId}`);
+        Logger.log(`Data channel closed for ${peerId}`);
         this.emit('connectionStateChange', {
           peerId,
           state: 'disconnected',
@@ -495,7 +616,7 @@ export class PeerConnectionManager
       };
 
       dataChannel.onerror = (error) => {
-        console.error(`Data channel error for ${peerId}:`, error);
+        Logger.error(`Data channel error for ${peerId}:`, error);
       };
     }
   }
@@ -504,31 +625,33 @@ export class PeerConnectionManager
     message: PeerMessage,
     targetPeerId?: string
   ): Promise<void> {
-    try {
-      console.log('Attempting to send message:', {
-        message,
-        targetPeerId,
-        isConnected: this.isConnected(targetPeerId || 'host'),
-      });
+    return this.retryConnection(async () => {
+      try {
+        Logger.log('Attempting to send message:', {
+          message,
+          targetPeerId,
+          isConnected: this.isConnected(targetPeerId || 'host'),
+        });
 
-      if (!this.currentRoomId) {
-        throw new Error('Not connected to any room');
+        if (!this.currentRoomId) {
+          throw new Error('Not connected to any room');
+        }
+
+        // If no specific peer is targeted, broadcast to all peers
+        if (!targetPeerId) {
+          const peers = Array.from(this.connections.keys());
+          await Promise.all(
+            peers.map((peerId) => this.sendMessageToPeer(message, peerId))
+          );
+          return;
+        }
+
+        await this.sendMessageToPeer(message, targetPeerId);
+      } catch (error) {
+        Logger.error('Failed to send message:', error);
+        throw error;
       }
-
-      // If no specific peer is targeted, broadcast to all peers
-      if (!targetPeerId) {
-        const peers = Array.from(this.connections.keys());
-        await Promise.all(
-          peers.map((peerId) => this.sendMessageToPeer(message, peerId))
-        );
-        return;
-      }
-
-      await this.sendMessageToPeer(message, targetPeerId);
-    } catch (error) {
-      console.error('Failed to send message:', error);
-      throw error;
-    }
+    });
   }
 
   private async sendMessageToPeer(
@@ -554,7 +677,7 @@ export class PeerConnectionManager
       connection.dataChannel.send(JSON.stringify(message));
       this.emit('message', message, peerId);
     } catch (error) {
-      console.error(`Failed to send message to peer ${peerId}:`, error);
+      Logger.error(`Failed to send message to peer ${peerId}:`, error);
       throw error;
     }
   }
@@ -588,7 +711,7 @@ export class PeerConnectionManager
     const isPeerConnected =
       connection.connection.connectionState === 'connected';
 
-    console.log('Connection status check:', {
+    Logger.log('Connection status check:', {
       peerId,
       dataChannelState: connection.dataChannel?.readyState,
       connectionState: connection.connection.connectionState,
@@ -596,6 +719,27 @@ export class PeerConnectionManager
     });
 
     return isDataChannelOpen || isPeerConnected;
+  }
+
+  private async retryConnection(fn: () => Promise<void>, maxRetries = 3) {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        await fn();
+        return;
+      } catch (error) {
+        if (i === maxRetries - 1) throw error;
+
+        if (!isTest) {
+          Logger.warn(`Attempt ${i + 1} failed:`, error);
+          const delay = Math.pow(2, i) * 1000;
+          Logger.log(`Retrying in ${delay}ms...`);
+        }
+
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.pow(2, i) * 1000)
+        );
+      }
+    }
   }
 }
 

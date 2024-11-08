@@ -138,7 +138,6 @@ describe('PeerConnectionManager', () => {
     );
   });
 
-  // Add a helper function for other tests
   const createAndWaitForRoom = async () => {
     const roomJoinedPromise = new Promise<void>((resolve) => {
       manager.once('roomJoined', () => resolve());
