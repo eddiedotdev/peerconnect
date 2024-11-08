@@ -2,7 +2,7 @@
 
 import { useMutation } from '@tanstack/react-query';
 import type { PeerMessage } from '../../core/types';
-import { usePeerSyncContext } from '../components/peer-sync-context';
+import { usePeerSyncContext } from '../components/peer-connect-context';
 
 /**
  * Extended message type that includes peer ID and timestamp.
