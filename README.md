@@ -26,7 +26,7 @@ PeerConnect is a serverless, real-time peer-to-peer connection library for web a
 ### Vanilla JavaScript
 
 ```bash
-npm install peerconnect
+// TODO: Hosted CDN package
 ```
 
 ### React
