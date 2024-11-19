@@ -32,7 +32,7 @@ PeerConnect is a serverless, real-time peer-to-peer connection library for web a
 ### React
 
 ```bash
-npm install peerconnect
+// TODO: Publish to NPM
 ```
 
 ## Usage
